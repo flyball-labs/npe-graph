@@ -1,4 +1,16 @@
 [package]
 name = "npe-graph"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "A node-port-edge graph for engineering schematics (circuits, control flow, hydraulics)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+slotmap = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+petgraph = { version = "0.8", optional = true }
+
+[features]
+default = []
+serde = ["dep:serde", "slotmap/serde"]
+petgraph = ["dep:petgraph"]
