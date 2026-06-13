@@ -73,6 +73,7 @@
 
 mod graph;
 mod id;
+mod library;
 mod net;
 
 #[cfg(feature = "petgraph")]
@@ -80,4 +81,5 @@ mod interop;
 
 pub use graph::{ConnectError, Graph, NodeMissing};
 pub use id::{EdgeId, NodeId, PortId};
+pub use library::{NodeProto, NodeTemplate};
 pub use net::Net;
