@@ -307,6 +307,42 @@ impl<N, P, E> Graph<N, P, E> {
             .copied()
     }
 
+    /// The first port of `node` whose data satisfies `pred`, in pinout order.
+    ///
+    /// This is the data-agnostic hook for "find the pin named X": the core
+    /// can't know your `P` has names, so you supply the predicate. For a
+    /// repeated lookup, build a map once instead (see crate docs); for a
+    /// fixed pinout known at compile time, an index constant is cheaper still.
+    ///
+    /// ```
+    /// # use npe_graph::Graph;
+    /// let mut g: Graph<(), &str, ()> = Graph::new();
+    /// let n = g.add_node(());
+    /// g.add_port(n, "a").unwrap();
+    /// let out = g.add_port(n, "Output").unwrap();
+    /// assert_eq!(g.find_port(n, |p| *p == "Output"), Some(out));
+    /// ```
+    pub fn find_port<F>(&self, node: NodeId, mut pred: F) -> Option<PortId>
+    where
+        F: FnMut(&P) -> bool,
+    {
+        self.ports(node)
+            .find(|&p| self.port(p).map_or(false, &mut pred))
+    }
+
+    /// Every port of `node` whose data satisfies `pred`, in pinout order.
+    pub fn find_ports<'a, F>(
+        &'a self,
+        node: NodeId,
+        mut pred: F,
+    ) -> impl Iterator<Item = PortId> + 'a
+    where
+        F: FnMut(&P) -> bool + 'a,
+    {
+        self.ports(node)
+            .filter(move |&p| self.port(p).map_or(false, &mut pred))
+    }
+
     /// Edges incident to a port.
     pub fn port_edges(&self, port: PortId) -> impl Iterator<Item = EdgeId> + '_ {
         self.ports
