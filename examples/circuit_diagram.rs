@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use npe_graph::{Graph, NodeTemplate};
+use npe_graph::{Graph, NodeId, NodeTemplate};
 
 /// The data associated with an edge. Since this is a breadboard
 /// circuit example there's no data but this could include wire
@@ -235,9 +235,11 @@ impl NodeTemplate<NodeData, PinData> for LM555 {
     }
 }
 
+type CircuitGraph = Graph<NodeData, PinData, EdgeData>;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Instantiate the graph with the correct data types
-    let mut g: Graph<NodeData, PinData, WireData> = Graph::new();
+    let mut g: CircuitGraph = Graph::new();
 
     // Add the components by their templates, which automatically
     // creates the nodes, adds its node data, then creates the ports
