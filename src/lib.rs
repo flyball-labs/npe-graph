@@ -20,31 +20,7 @@
 //! * An **edge** connects two *ports* (never two nodes directly). Carries user
 //!   data `E` (wire gauge, pipe diameter, signal type, GUI spline route...).
 //!
-//! ## Design decisions (and why)
-//!
-//! * **Generational arena storage** ([`slotmap`]) — `NodeId` / `PortId` /
-//!   `EdgeId` are small `Copy` keys that stay valid across unrelated removals
-//!   and are never reused for a different element (the ABA problem GUIs hit
-//!   with plain indices: select a node, delete it, a new node reuses the index,
-//!   the stale selection now points at the wrong thing). Stale IDs simply miss.
-//! * **IDs everywhere, references nowhere** — all topology is expressed through
-//!   `Copy` IDs, so a GUI can hold selections, undo stacks, and clipboard
-//!   payloads without fighting the borrow checker.
-//! * **Edges are binary, nets are derived** — a schematic *net* (everything
-//!   electrically/hydraulically common) is often >2 ports. Rather than
-//!   hyperedges, we keep edges as simple 2-port wires — which is what users
-//!   actually draw — and compute nets as connected components on demand
-//!   ([`Graph::nets`]). Solvers get nets; the GUI gets individual wires.
-//! * **No baked-in port direction** — circuits are bidirectional, dataflow is
-//!   not. Direction/typing lives in your `P` data, and you enforce it at
-//!   connect time via [`Graph::connect_with`] or by wrapping `connect`.
-//! * **Not optimized for million-node traversal** — optimized for tens to
-//!   hundreds of *fat* elements, stable identity, cheap queries in every
-//!   direction (node→ports, port→edges, edge→ports→nodes), and easy
-//!   serialization. If a solver wants a classic thin graph, project one out
-//!   with [`Graph::to_petgraph`] (feature `petgraph`) or [`Graph::nets`].
-//!
-//! ## Quick taste
+//! ## Quick example
 //!
 //! ```
 //! use npe_graph::Graph;
