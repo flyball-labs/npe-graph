@@ -4,6 +4,28 @@
 
 This library is designed for representing various engineering schematics in user-facing programs and file formats. Examples of schematics that conform to the node-port-edge data structure would be an electrical schematic in which the components are nodes, the ports are their pins, and the edges are wires or traces. Hydraulic schematics, controls charts, and architecture diagrams are all similar in structure.
 
+## Example
+
+```rust
+use npe_graph::Graph;
+// N = component, P = pin, E = wire — use your own rich types.
+let mut g: Graph<&str, &str, &str> = Graph::new();
+let r1 = g.add_node("R1: resistor 10k");
+let r1_a = g.add_port(r1, "a").unwrap();
+let r1_b = g.add_port(r1, "b").unwrap();
+let c1 = g.add_node("C1: cap 100n");
+let c1_pos = g.add_port(c1, "+").unwrap();
+let w = g.connect(r1_b, c1_pos, "wire").unwrap();
+assert_eq!(g.port_node(r1_b), Some(r1));
+assert_eq!(g.edge_endpoints(w), Some((r1_b, c1_pos)));
+assert!(g.neighbors(r1).any(|n| n == c1));
+// Removing a node cascades: its ports and their edges go too.
+g.remove_node(c1);
+assert!(!g.contains_edge(w));
+assert!(g.contains_port(r1_a)); // unrelated IDs unaffected
+```
+
+
 ## Why a new graph library?
 
 There are some terrific graph libraries in the Rust ecosystem, including classic hits such as `petgraph`. So why create a new graph structure crate?
