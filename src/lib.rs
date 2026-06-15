@@ -81,5 +81,5 @@ mod interop;
 
 pub use graph::{ConnectError, Graph, NodeMissing};
 pub use id::{EdgeId, NodeId, PortId};
-pub use library::{NodeProto, NodeTemplate};
+pub use library::{KeyedNodeTemplate, NodeProto, NodeTemplate};
 pub use net::Net;

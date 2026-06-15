@@ -32,6 +32,38 @@
 
 use crate::graph::Graph;
 use crate::id::{NodeId, PortId};
+use std::collections::HashMap;
+use std::hash::Hash;
+
+/// A reusable component whose pins each carry a **key** — typically an enum
+/// variant — declared alongside their data.
+///
+/// This is the keyed sibling of [`NodeTemplate`]. It exists to kill positional
+/// index bookkeeping: the pin's identity and its data are stated together in
+/// one list, and [`Graph::instantiate_keyed`] returns a `key → PortId` map, so
+/// no call site ever refers to a pin by integer position.
+///
+/// ```
+/// # use npe_graph::KeyedNodeTemplate;
+/// #[derive(PartialEq, Eq, Hash, Clone, Copy)]
+/// enum Pin { Anode, Cathode }
+///
+/// struct Diode;
+/// impl KeyedNodeTemplate<&'static str, &'static str, Pin> for Diode {
+///     fn node_data(&self) -> &'static str { "D" }
+///     fn keyed_ports(&self) -> Vec<(Pin, &'static str)> {
+///         vec![(Pin::Anode, "+"), (Pin::Cathode, "-")]
+///     }
+/// }
+/// ```
+pub trait KeyedNodeTemplate<N, P, K> {
+    /// Fresh node data for one instance of this component.
+    fn node_data(&self) -> N;
+
+    /// Fresh `(key, port data)` pairs in pinout order. The key is what you'll
+    /// look up by; the data is the port payload.
+    fn keyed_ports(&self) -> Vec<(K, P)>;
+}
 
 /// A reusable component definition: node data plus an ordered pinout.
 ///
@@ -95,6 +127,61 @@ impl<N, P, E> Graph<N, P, E> {
             })
             .collect();
         (node, ports)
+    }
+
+    /// Stamps `template` into the graph and returns its ports keyed by the
+    /// label each pin declared — no positional indices to keep in sync.
+    ///
+    /// This is the fix for the "magic index constant" problem: with
+    /// [`Graph::instantiate`] you address `ports[2]` and must keep that `2`
+    /// aligned with the pinout by hand. Here the key travels *with* the pin
+    /// data in a single declaration, so reordering or inserting pins can't
+    /// break a call site. Use an enum key for compile-time-checked, typo-proof
+    /// lookups: `pins[&Pin::Output]`.
+    ///
+    /// Insertion order still follows the declared order, so [`Graph::ports`]
+    /// remains positional too — you get both views from one source of truth.
+    /// Duplicate keys collapse (last wins); for a pinout that's a bug worth a
+    /// debug assertion in your template.
+    ///
+    /// ```
+    /// use npe_graph::{Graph, KeyedNodeTemplate};
+    ///
+    /// #[derive(PartialEq, Eq, Hash, Clone, Copy)]
+    /// enum Pin { A, B }
+    ///
+    /// struct Resistor;
+    /// impl KeyedNodeTemplate<&'static str, &'static str, Pin> for Resistor {
+    ///     fn node_data(&self) -> &'static str { "R" }
+    ///     fn keyed_ports(&self) -> Vec<(Pin, &'static str)> {
+    ///         vec![(Pin::A, "a"), (Pin::B, "b")]
+    ///     }
+    /// }
+    ///
+    /// let mut g: Graph<&str, &str, ()> = Graph::new();
+    /// let (n, pins) = g.instantiate_keyed(&Resistor);
+    /// assert_eq!(g[pins[&Pin::A]], "a");
+    /// assert_eq!(g.ports(n).count(), 2); // positional order preserved too
+    /// ```
+    pub fn instantiate_keyed<K>(
+        &mut self,
+        template: &(impl KeyedNodeTemplate<N, P, K> + ?Sized),
+    ) -> (NodeId, HashMap<K, PortId>)
+    where
+        K: Eq + Hash,
+    {
+        let node = self.add_node(template.node_data());
+        let map = template
+            .keyed_ports()
+            .into_iter()
+            .map(|(key, data)| {
+                let port = self
+                    .add_port(node, data)
+                    .expect("node was just added; it must exist");
+                (key, port)
+            })
+            .collect();
+        (node, map)
     }
 }
 
