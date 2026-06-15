@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use npe_graph::{Graph, NodeId, NodeTemplate};
+use npe_graph::{Graph, KeyedNodeTemplate, NodeId, NodeTemplate};
 
 /// The data associated with an edge. Since this is a breadboard
 /// circuit example there's no data but this could include wire
@@ -44,6 +44,14 @@ impl PinData {
 
     fn polar_negative() -> Self {
         PinData::Polar(Polarity::Negative)
+    }
+
+    /// The human-facing name of a pin, if it has one
+    fn name(&self) -> Option<&str> {
+        match self {
+            PinData::Ic(ic) => Some(&ic.description),
+            _ => None,
+        }
     }
 }
 
@@ -93,7 +101,7 @@ struct PassiveData {
 /// The data associated with a node on the graph, split by the types
 /// of nodes available.
 #[derive(Clone, Debug)]
-enum NodeData {
+enum ComponentData {
     Ic(IcData),
     Resistor(PassiveData),
     Capacitor(PassiveData),
@@ -108,35 +116,35 @@ enum NodeData {
 /// or labelled nets like an output or input
 #[derive(Clone, Debug)]
 struct Net {
-    data: NodeData,
+    data: ComponentData,
     port: PinData,
 }
 
 impl Net {
     fn dc_source(name: &str, volts: usize) -> Self {
         Self {
-            data: NodeData::VdcSource(volts),
+            data: ComponentData::VdcSource(volts),
             port: PinData::Passive,
         }
     }
 
     fn ground(name: &str) -> Self {
         Self {
-            data: NodeData::Ground,
+            data: ComponentData::Ground,
             port: PinData::Passive,
         }
     }
 
     fn label(name: &str) -> Self {
         Self {
-            data: NodeData::Label(name.into()),
+            data: ComponentData::Label(name.into()),
             port: PinData::Passive,
         }
     }
 }
 
-impl NodeTemplate<NodeData, PinData> for Net {
-    fn node_data(&self) -> NodeData {
+impl NodeTemplate<ComponentData, PinData> for Net {
+    fn node_data(&self) -> ComponentData {
         self.data.clone()
     }
 
@@ -150,14 +158,14 @@ impl NodeTemplate<NodeData, PinData> for Net {
 /// that is optionally polar (per the variant of `PinData`)
 #[derive(Clone, Debug)]
 struct Passive {
-    data: NodeData,
+    data: ComponentData,
     ports: [PinData; 2],
 }
 
 impl Passive {
     fn capacitor(name: &str, value: usize) -> Self {
         Passive {
-            data: NodeData::Capacitor(PassiveData {
+            data: ComponentData::Capacitor(PassiveData {
                 name: name.into(),
                 value,
                 unit: "uF".into(),
@@ -168,7 +176,7 @@ impl Passive {
 
     fn resistor(name: &str, value: usize) -> Self {
         Passive {
-            data: NodeData::Resistor(PassiveData {
+            data: ComponentData::Resistor(PassiveData {
                 name: name.into(),
                 value,
                 unit: "ohm".into(),
@@ -179,7 +187,7 @@ impl Passive {
 
     fn inductor(name: &str, value: usize) -> Self {
         Passive {
-            data: NodeData::Inductor(PassiveData {
+            data: ComponentData::Inductor(PassiveData {
                 name: name.into(),
                 value,
                 unit: "mh".into(),
@@ -189,8 +197,8 @@ impl Passive {
     }
 }
 
-impl NodeTemplate<NodeData, PinData> for Passive {
-    fn node_data(&self) -> NodeData {
+impl NodeTemplate<ComponentData, PinData> for Passive {
+    fn node_data(&self) -> ComponentData {
         self.data.clone()
     }
 
@@ -199,15 +207,15 @@ impl NodeTemplate<NodeData, PinData> for Passive {
     }
 }
 
-struct LM555 {
-    data: NodeData,
+struct Lm555 {
+    data: ComponentData,
     ports: Vec<PinData>,
 }
 
-impl LM555 {
+impl Lm555 {
     fn default() -> Self {
         let ports = vec![
-            PinData::ic(1, "GND"),
+            PinData::ic(1, "Ground"),
             PinData::ic(2, "Trigger"),
             PinData::ic(3, "Output"),
             PinData::ic(4, "Reset"),
@@ -217,7 +225,7 @@ impl LM555 {
             PinData::ic(8, "V_Plus"),
         ];
         Self {
-            data: NodeData::Ic(IcData {
+            data: ComponentData::Ic(IcData {
                 name: String::from("555 timer"),
             }),
             ports,
@@ -225,8 +233,23 @@ impl LM555 {
     }
 }
 
-impl NodeTemplate<NodeData, PinData> for LM555 {
-    fn node_data(&self) -> NodeData {
+impl KeyedNodeTemplate<ComponentData, PinData, String> for Lm555 {
+    fn node_data(&self) -> ComponentData {
+        self.data.clone()
+    }
+
+    /// Use the pin names as port keys for this chip since
+    /// the pin names are unique
+    fn keyed_ports(&self) -> Vec<(String, PinData)> {
+        self.ports
+            .iter()
+            .map(|p| (p.name().unwrap_or("unnamed").into(), p.clone()))
+            .collect()
+    }
+}
+
+impl NodeTemplate<ComponentData, PinData> for Lm555 {
+    fn node_data(&self) -> ComponentData {
         self.data.clone()
     }
 
@@ -235,7 +258,7 @@ impl NodeTemplate<NodeData, PinData> for LM555 {
     }
 }
 
-type CircuitGraph = Graph<NodeData, PinData, EdgeData>;
+type CircuitGraph = Graph<ComponentData, PinData, WireData>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Instantiate the graph with the correct data types
@@ -244,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add the components by their templates, which automatically
     // creates the nodes, adds its node data, then creates the ports
     // with their node data
-    let (lm555, lm555_ports) = g.instantiate(&LM555::default());
+    let (lm555, lm555_pins) = g.instantiate_keyed(&Lm555::default());
     let (c1, c1_ports) = g.instantiate(&Passive::capacitor("C1", 10));
     let (r1, r1_ports) = g.instantiate(&Passive::resistor("R1", 100));
     let (r2, r2_ports) = g.instantiate(&Passive::resistor("R2", 100));
@@ -255,7 +278,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (output, output_ports) = g.instantiate(&Net::label("OUTPUT"));
 
     // Wire the circuit up
-    // g.connect(lm555_ports.iter().filter(|p| p))
+    g.connect(lm555_pins["Ground"], gnd_ports[0], WireData)?;
+    g.connect(filter_cap_ports[0], gnd_ports[0], WireData)?;
+
+    g.connect(c1_ports[0], gnd_ports[0], WireData)?;
+    g.connect(c1_ports[1], r2_ports[0], WireData)?;
+    g.connect(r2_ports[1], r1_ports[0], WireData)?;
+    g.connect(r1_ports[1], vsource_ports[0], WireData)?;
+
+    g.connect(lm555_pins["Control_Voltage"], filter_cap_ports[1], WireData)?;
+    g.connect(lm555_pins["Trigger"], c1_ports[1], WireData)?;
+    g.connect(lm555_pins["Threshold"], c1_ports[1], WireData)?;
+    g.connect(lm555_pins["Discharge"], r2_ports[1], WireData)?;
+    g.connect(lm555_pins["V_Plus"], vsource_ports[0], WireData)?;
+    g.connect(lm555_pins["Reset"], vsource_ports[0], WireData)?;
+    g.connect(lm555_pins["Output"], output_ports[0], WireData)?;
 
     Ok(())
 }
