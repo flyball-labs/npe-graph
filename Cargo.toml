@@ -1,9 +1,14 @@
 [package]
 name = "npe-graph"
 version = "0.1.0"
-edition = "2021"
-description = "A node-port-edge graph for engineering schematics (circuits, control flow, hydraulics)."
+edition = "2024"
+description = "A node-port-edge graph for representing engineering schematics"
 license = "MIT OR Apache-2.0"
+authors = ["Xander Cesari <xander@merriman.industries>"]
+repository = "https://github.com/flyball-labs/npe-graph"
+documentation = "https://docs.rs/npe_graph"
+categories = ["data structures"]
+
 
 [dependencies]
 slotmap = "1"
@@ -14,3 +19,8 @@ petgraph = { version = "0.8", optional = true }
 default = []
 serde = ["dep:serde", "slotmap/serde"]
 petgraph = ["dep:petgraph"]
+
+[dev-dependencies]
+serde_json = "1"
+ron = "0.8"
+bincode = "1.3"
