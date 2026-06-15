@@ -5,7 +5,7 @@
 
 #![cfg(feature = "serde")]
 
-use schemagraph::{EdgeId, Graph, NodeId, PortId};
+use npe_graph::{EdgeId, Graph, NodeId, PortId};
 
 type G = Graph<String, String, String>;
 

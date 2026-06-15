@@ -202,10 +202,10 @@ impl<N, P, E> Graph<N, P, E> {
             // double-remove `port`, so clean up manually.
             if let Some(e) = self.edges.remove(edge) {
                 for p in e.ports {
-                    if p != port {
-                        if let Some(other) = self.ports.get_mut(p) {
-                            other.edges.retain(|&x| x != edge);
-                        }
+                    if p != port
+                        && let Some(other) = self.ports.get_mut(p)
+                    {
+                        other.edges.retain(|&x| x != edge);
                     }
                 }
             }
@@ -327,7 +327,7 @@ impl<N, P, E> Graph<N, P, E> {
         F: FnMut(&P) -> bool,
     {
         self.ports(node)
-            .find(|&p| self.port(p).map_or(false, &mut pred))
+            .find(|&p| self.port(p).is_some_and(&mut pred))
     }
 
     /// Every port of `node` whose data satisfies `pred`, in pinout order.
@@ -340,7 +340,7 @@ impl<N, P, E> Graph<N, P, E> {
         F: FnMut(&P) -> bool + 'a,
     {
         self.ports(node)
-            .filter(move |&p| self.port(p).map_or(false, &mut pred))
+            .filter(move |&p| self.port(p).is_some_and(&mut pred))
     }
 
     /// Edges incident to a port.

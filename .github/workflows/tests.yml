@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings   # treat warnings as errors in CI
+
+jobs:
+  test:
+    name: check & test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The crate's behavior changes with features, so exercise the
+        # meaningful combinations rather than just the default build.
+        features:
+          - ""                       # default (no optional features)
+          - "serde"
+          - "petgraph"
+          - "serde,petgraph"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --all-targets --features "${{ matrix.features }}"
+
+      - name: cargo test
+        run: cargo test --all-targets --features "${{ matrix.features }}"
+
+      # Doctests aren't covered by --all-targets; run them explicitly once.
+      - name: cargo test --doc
+        if: matrix.features == 'serde,petgraph'
+        run: cargo test --doc --features "${{ matrix.features }}"
+
+  lint:
+    name: fmt & clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features
