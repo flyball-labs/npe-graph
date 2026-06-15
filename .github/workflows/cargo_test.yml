@@ -1,0 +1,11 @@
+name: "cargo_test"
+on:
+  pull_request:
+  push:
+    branches: [master]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Cargo Test
+      uses: Kristories/cargo-test@v1.0.0
