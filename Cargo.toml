@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 authors = ["Xander Cesari <xander@merriman.industries>"]
 repository = "https://github.com/flyball-labs/npe-graph"
 documentation = "https://docs.rs/npe_graph"
-categories = ["data structures"]
+categories = ["data-structures"]
 
 
 [dependencies]
