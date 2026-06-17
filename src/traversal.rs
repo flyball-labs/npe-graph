@@ -1,12 +1,11 @@
 //! Graph traversal algorithms
-// #![allow(dead_code, unused_variables)]
 
 use std::collections::HashSet;
 
 use crate::{EdgeId, NodeId, PortId, graph::Graph};
 
 #[derive(Debug)]
-enum LinkError {
+pub enum LinkError {
     NonAdjacentNodes,
     BadLink,
     EmptyCycle,
@@ -18,7 +17,7 @@ enum LinkError {
 /// An ordered link between two adjacencies in a graph
 // type Link = (PortId, EdgeId, PortId);
 
-struct Link(PortId, EdgeId, PortId);
+pub struct Link(PortId, EdgeId, PortId);
 
 impl Link {
     fn new(source: PortId, edge: EdgeId, dest: PortId) -> Self {
@@ -299,5 +298,401 @@ impl<N, P, E> Graph<N, P, E> {
     ) -> Vec<ClosedCycle> {
         todo!()
         // vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Graph;
+
+    type TG = Graph<&'static str, &'static str, &'static str>;
+
+    // ── builders ────────────────────────────────────────────────────────────
+    fn node(g: &mut TG, name: &'static str) -> NodeId {
+        g.add_node(name)
+    }
+    fn port(g: &mut TG, n: NodeId, name: &'static str) -> PortId {
+        g.add_port(n, name).unwrap()
+    }
+    fn wire(g: &mut TG, a: PortId, b: PortId) -> EdgeId {
+        g.connect(a, b, "w").unwrap()
+    }
+
+    /// Triangle A-B-C. Returns nodes and the three edges, plus the ports so
+    /// tests can build links with correct orientation.
+    /// Ports: each node has an "in" and "out"; edges chain out->in around.
+    struct Triangle {
+        a: NodeId,
+        b: NodeId,
+        c: NodeId,
+        a_in: PortId,
+        a_out: PortId,
+        b_in: PortId,
+        b_out: PortId,
+        c_in: PortId,
+        c_out: PortId,
+        ab: EdgeId,
+        bc: EdgeId,
+        ca: EdgeId,
+    }
+    fn triangle() -> (TG, Triangle) {
+        let mut g: TG = Graph::new();
+        let (a, b, c) = (node(&mut g, "A"), node(&mut g, "B"), node(&mut g, "C"));
+        let a_in = port(&mut g, a, "a_in");
+        let a_out = port(&mut g, a, "a_out");
+        let b_in = port(&mut g, b, "b_in");
+        let b_out = port(&mut g, b, "b_out");
+        let c_in = port(&mut g, c, "c_in");
+        let c_out = port(&mut g, c, "c_out");
+        let ab = wire(&mut g, a_out, b_in);
+        let bc = wire(&mut g, b_out, c_in);
+        let ca = wire(&mut g, c_out, a_in);
+        (
+            g,
+            Triangle {
+                a,
+                b,
+                c,
+                a_in,
+                a_out,
+                b_in,
+                b_out,
+                c_in,
+                c_out,
+                ab,
+                bc,
+                ca,
+            },
+        )
+    }
+
+    fn nodeset(mut v: Vec<NodeId>) -> Vec<NodeId> {
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    // ── cycle_rank / connected_components ────────────────────────────────────
+    #[test]
+    fn rank_empty_and_singletons() {
+        let mut g: TG = Graph::new();
+        assert_eq!(g.cycle_rank(), 0);
+        assert_eq!(g.connected_components(), 0);
+        node(&mut g, "lonely");
+        assert_eq!(g.connected_components(), 1);
+        assert_eq!(g.cycle_rank(), 0);
+    }
+
+    #[test]
+    fn rank_single_edge_is_a_tree() {
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (pa, pb) = (port(&mut g, a, "a"), port(&mut g, b, "b"));
+        wire(&mut g, pa, pb);
+        assert_eq!(g.cycle_rank(), 0);
+        assert_eq!(g.connected_components(), 1);
+    }
+
+    #[test]
+    fn rank_triangle_one_loop() {
+        let (g, _) = triangle();
+        assert_eq!(g.cycle_rank(), 1);
+        assert_eq!(g.connected_components(), 1);
+    }
+
+    #[test]
+    fn rank_parallel_edges_one_loop() {
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (a1, a2) = (port(&mut g, a, "a1"), port(&mut g, a, "a2"));
+        let (b1, b2) = (port(&mut g, b, "b1"), port(&mut g, b, "b2"));
+        wire(&mut g, a1, b1);
+        wire(&mut g, a2, b2);
+        assert_eq!(g.cycle_rank(), 1); // E=2, V=2, C=1 -> 1
+    }
+
+    #[test]
+    fn rank_jumper_counts_as_loop() {
+        let mut g: TG = Graph::new();
+        let a = node(&mut g, "A");
+        let (p1, p2) = (port(&mut g, a, "p1"), port(&mut g, a, "p2"));
+        wire(&mut g, p1, p2); // internal jumper: self-loop in the component graph
+        assert_eq!(g.connected_components(), 1);
+        assert_eq!(g.cycle_rank(), 1); // E=1, V=1, C=1 -> 1
+    }
+
+    #[test]
+    fn rank_disjoint_components() {
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (c, d) = (node(&mut g, "C"), node(&mut g, "D"));
+        let (pa, pb) = (port(&mut g, a, "a"), port(&mut g, b, "b"));
+        wire(&mut g, pa, pb);
+        let (pc, pd) = (port(&mut g, c, "c"), port(&mut g, d, "d"));
+        wire(&mut g, pc, pd);
+        assert_eq!(g.connected_components(), 2);
+        assert_eq!(g.cycle_rank(), 0);
+    }
+
+    #[test]
+    fn rank_figure_eight_two_loops() {
+        // Two triangles sharing node A. Rank should be 2.
+        let (mut g, t) = triangle();
+        let (d, e) = (node(&mut g, "D"), node(&mut g, "E"));
+        let a_x = port(&mut g, t.a, "a_x");
+        let a_y = port(&mut g, t.a, "a_y");
+        let (d1, d2) = (port(&mut g, d, "d1"), port(&mut g, d, "d2"));
+        let (e1, e2) = (port(&mut g, e, "e1"), port(&mut g, e, "e2"));
+        wire(&mut g, a_x, d1);
+        wire(&mut g, d2, e1);
+        wire(&mut g, e2, a_y);
+        assert_eq!(g.cycle_rank(), 2);
+    }
+
+    // ── Link::new_checked ─────────────────────────────────────────────────────
+    #[test]
+    fn link_checked_valid() {
+        let (g, t) = triangle();
+        let link = Link::new_checked(&g, t.a_out, t.ab, t.b_in).unwrap();
+        assert_eq!(*link.source_as_ref(), t.a_out);
+        assert_eq!(*link.edge_as_ref(), t.ab);
+        assert_eq!(*link.dest_as_ref(), t.b_in);
+    }
+
+    #[test]
+    fn link_checked_non_incident_is_bad() {
+        let (g, t) = triangle();
+        // edge `bc` is not incident to a_out / b_in
+        assert!(matches!(
+            Link::new_checked(&g, t.a_out, t.bc, t.b_in),
+            Err(LinkError::BadLink)
+        ));
+    }
+
+    #[test]
+    fn link_checked_jumper_rejected() {
+        let mut g: TG = Graph::new();
+        let a = node(&mut g, "A");
+        let (p1, p2) = (port(&mut g, a, "p1"), port(&mut g, a, "p2"));
+        let j = wire(&mut g, p1, p2);
+        assert!(matches!(
+            Link::new_checked(&g, p1, j, p2),
+            Err(LinkError::JumperEdge)
+        ));
+    }
+
+    #[test]
+    fn link_nodes_resolves_both_ends() {
+        let (g, t) = triangle();
+        let link = Link::new(t.a_out, t.ab, t.b_in);
+        assert_eq!(link.link_nodes(&g), (Some(t.a), Some(t.b)));
+    }
+
+    // ── OpenCycle basics ──────────────────────────────────────────────────────
+    #[test]
+    fn open_cycle_starts_empty() {
+        let oc = OpenCycle::new();
+        assert!(oc.is_empty());
+        assert_eq!(oc.last_port(), None);
+    }
+
+    #[test]
+    fn try_extend_on_empty_seeds_the_cycle() {
+        // try_extend now seeds the first link into an empty cycle.
+        let (g, t) = triangle();
+        let mut oc = OpenCycle::new();
+        let link = Link::new(t.a_out, t.ab, t.b_in);
+        assert!(oc.try_extend(&g, link).is_ok());
+        assert!(!oc.is_empty());
+        assert_eq!(oc.last_port(), Some(&t.b_in));
+    }
+
+    #[test]
+    fn build_full_cycle_through_public_api() {
+        // End-to-end: new() -> seed -> extend -> extend -> close, no direct
+        // OpenCycle(vec![..]) construction.
+        let (g, t) = triangle();
+        let mut oc = OpenCycle::new();
+        oc.try_extend(&g, Link::new(t.a_out, t.ab, t.b_in)).unwrap();
+        oc.try_extend(&g, Link::new(t.b_out, t.bc, t.c_in)).unwrap();
+        oc.try_extend(&g, Link::new(t.c_out, t.ca, t.a_in)).unwrap();
+        let closed = oc.try_into_closed(&g).expect("triangle closes");
+        assert_eq!(
+            nodeset(closed.as_node_list(&g).unwrap()),
+            nodeset(vec![t.a, t.b, t.c])
+        );
+    }
+
+    #[test]
+    fn try_extend_adjacent_succeeds() {
+        let (g, t) = triangle();
+        // Seed directly (the only way to insert link #1 today).
+        let mut oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]);
+        let next = Link::new(t.b_out, t.bc, t.c_in);
+        assert!(oc.try_extend(&g, next).is_ok());
+        assert_eq!(oc.last_port(), Some(&t.c_in));
+    }
+
+    #[test]
+    fn try_extend_non_adjacent_rejected() {
+        let (g, t) = triangle();
+        let mut oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]);
+        // frontier is B; this link sources from C, not B.
+        let bad = Link::new(t.c_out, t.ca, t.a_in);
+        assert!(matches!(
+            oc.try_extend(&g, bad),
+            Err(LinkError::NonAdjacentNodes)
+        ));
+    }
+
+    // ── try_into_closed ───────────────────────────────────────────────────────
+    #[test]
+    fn close_open_path_errors() {
+        let (g, t) = triangle();
+        let oc = OpenCycle(vec![
+            Link::new(t.a_out, t.ab, t.b_in),
+            Link::new(t.b_out, t.bc, t.c_in),
+        ]); // A->B->C, not closed
+        assert!(matches!(oc.try_into_closed(&g), Err(LinkError::OpenCycle)));
+    }
+
+    #[test]
+    fn close_empty_errors() {
+        let (g, _) = triangle();
+        let oc = OpenCycle::new();
+        assert!(matches!(oc.try_into_closed(&g), Err(LinkError::EmptyCycle)));
+    }
+
+    #[test]
+    fn close_full_triangle_succeeds() {
+        let (g, t) = triangle();
+        let oc = OpenCycle(vec![
+            Link::new(t.a_out, t.ab, t.b_in),
+            Link::new(t.b_out, t.bc, t.c_in),
+            Link::new(t.c_out, t.ca, t.a_in),
+        ]);
+        let closed = oc.try_into_closed(&g).expect("triangle closes");
+        assert_eq!(
+            nodeset(closed.as_node_list(&g).unwrap()),
+            nodeset(vec![t.a, t.b, t.c])
+        );
+    }
+
+    // ── classify: all four outcomes + errors ─────────────────────────────────
+    #[test]
+    fn classify_extends() {
+        let (g, t) = triangle();
+        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        match oc.classify(&g, t.bc).unwrap() {
+            Step::Extends(link) => {
+                assert_eq!(*link.source_as_ref(), t.b_out);
+                assert_eq!(*link.dest_as_ref(), t.c_in);
+            }
+            _ => panic!("expected Extends"),
+        }
+    }
+
+    #[test]
+    fn classify_closes() {
+        let (g, t) = triangle();
+        let oc = OpenCycle(vec![
+            Link::new(t.a_out, t.ab, t.b_in),
+            Link::new(t.b_out, t.bc, t.c_in),
+        ]); // A->B->C, frontier C
+        match oc.classify(&g, t.ca).unwrap() {
+            Step::Closes(link) => assert_eq!(*link.dest_as_ref(), t.a_in),
+            _ => panic!("expected Closes"),
+        }
+    }
+
+    #[test]
+    fn classify_revisits_interior() {
+        // A->B->C, plus a second edge from C back to B. Classifying it must
+        // report RevisitsInterior at B (not Closes, since B isn't the start).
+        let (mut g, t) = triangle();
+        let b_alt = port(&mut g, t.b, "b_alt");
+        let c_alt = port(&mut g, t.c, "c_alt");
+        let cb = wire(&mut g, c_alt, b_alt); // C -> B back-edge
+        let oc = OpenCycle(vec![
+            Link::new(t.a_out, t.ab, t.b_in),
+            Link::new(t.b_out, t.bc, t.c_in),
+        ]);
+        match oc.classify(&g, cb).unwrap() {
+            Step::RevisitsInterior { at, .. } => assert_eq!(at, t.b),
+            other => panic!("expected RevisitsInterior at B"),
+        }
+    }
+
+    #[test]
+    fn classify_non_adjacent() {
+        let (g, t) = triangle();
+        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        // edge `ca` touches C and A, not B.
+        assert!(matches!(
+            oc.classify(&g, t.ca),
+            Err(LinkError::NonAdjacentNodes)
+        ));
+    }
+
+    #[test]
+    fn classify_jumper_at_frontier() {
+        let (mut g, t) = triangle();
+        // two extra ports on B with an edge between them: a jumper on the frontier
+        let bx = port(&mut g, t.b, "bx");
+        let by = port(&mut g, t.b, "by");
+        let jmp = wire(&mut g, bx, by);
+        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        assert!(matches!(oc.classify(&g, jmp), Err(LinkError::JumperEdge)));
+    }
+
+    #[test]
+    fn classify_on_empty_errors() {
+        let (g, t) = triangle();
+        let oc = OpenCycle::new();
+        assert!(matches!(oc.classify(&g, t.ab), Err(LinkError::EmptyCycle)));
+    }
+
+    // ── detection spec (pending implementation) ──────────────────────────────
+    // These encode the intended behavior of the stubbed search functions.
+    // Flip off `#[ignore]` as each lands.
+    #[test]
+    #[ignore = "detect_cycles is todo!()"]
+    fn detect_triangle_one_cycle() {
+        let (g, t) = triangle();
+        let cycles = g.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(
+            nodeset(cycles[0].as_node_list(&g).unwrap()),
+            nodeset(vec![t.a, t.b, t.c])
+        );
+    }
+
+    #[test]
+    #[ignore = "detect_cycles is todo!()"]
+    fn detect_tree_no_cycle() {
+        let mut g: TG = Graph::new();
+        let (a, b, c) = (node(&mut g, "A"), node(&mut g, "B"), node(&mut g, "C"));
+        let (pa, pb1) = (port(&mut g, a, "a"), port(&mut g, b, "b1"));
+        wire(&mut g, pa, pb1);
+        let (pb2, pc) = (port(&mut g, b, "b2"), port(&mut g, c, "c"));
+        wire(&mut g, pb2, pc);
+        assert_eq!(g.detect_cycles().len(), 0);
+    }
+
+    #[test]
+    #[ignore = "detect_predicated_cycles is todo!()"]
+    fn detect_directed_feedback_pair() {
+        // A.out -> B.in, B.out -> A.in : a directed 2-cycle under output->input.
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (a_in, a_out) = (port(&mut g, a, "in"), port(&mut g, a, "out"));
+        let (b_in, b_out) = (port(&mut g, b, "in"), port(&mut g, b, "out"));
+        wire(&mut g, a_out, b_in);
+        wire(&mut g, b_out, a_in);
+        let intra = |_n: &&str, _p: &&str, _q: &&str| true;
+        let inter = |from: &&str, _to: &&str, _e: &&str| *from == "out";
+        let cycles = g.detect_predicated_cycles(intra, inter);
+        assert_eq!(cycles.len(), 1);
     }
 }
