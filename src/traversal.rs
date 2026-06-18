@@ -98,7 +98,7 @@ impl OpenCycle {
     }
 
     /// Return the links
-    fn links(&self) -> &Vec<Link> {
+    fn links(&self) -> &[Link] {
         &self.0
     }
 
@@ -293,8 +293,8 @@ impl<N, P, E> Graph<N, P, E> {
     /// to another port.
     fn detect_predicated_cycles(
         &self,
-        intra: impl Fn(&N, &P, &P) -> bool,
-        inter: impl Fn(&P, &P, &E) -> bool,
+        intra_predicate: impl Fn(&N, &P, &P) -> bool,
+        inter_predicate: impl Fn(&P, &P, &E) -> bool,
     ) -> Vec<ClosedCycle> {
         todo!()
         // vec![]
