@@ -15,17 +15,15 @@ pub enum LinkError {
 }
 
 /// An ordered link between two adjacencies in a graph
-// type Link = (PortId, EdgeId, PortId);
-
-pub struct Link(PortId, EdgeId, PortId);
+pub struct Link {
+    pub source: PortId,
+    pub edge: EdgeId,
+    pub dest: PortId,
+}
 
 impl Link {
     fn new(source: PortId, edge: EdgeId, dest: PortId) -> Self {
-        Self {
-            0: source,
-            1: edge,
-            2: dest,
-        }
+        Self { source, edge, dest }
     }
 
     /// Emit a new link from a two `PortId`s and an `EdgeId`,
@@ -56,22 +54,7 @@ impl Link {
 
     /// Return the nodes on either end of the `Link`
     fn link_nodes<N, P, E>(&self, graph: &Graph<N, P, E>) -> (Option<NodeId>, Option<NodeId>) {
-        (graph.port_node(self.0), graph.port_node(self.2))
-    }
-
-    /// Convenience wrapper for readability
-    fn source_as_ref(&self) -> &PortId {
-        &self.0
-    }
-
-    /// Convenience wrapper for readability
-    fn edge_as_ref(&self) -> &EdgeId {
-        &self.1
-    }
-
-    /// Convenience wrapper for readability
-    fn dest_as_ref(&self) -> &PortId {
-        &self.2
+        (graph.port_node(self.source), graph.port_node(self.dest))
     }
 }
 
@@ -118,9 +101,7 @@ impl OpenCycle {
                 .port_node(*last_cycle_port)
                 .expect("links in the cycle have been checked good");
 
-            let source_link_node = graph
-                .port_node(*link.source_as_ref())
-                .ok_or(LinkError::BadLink)?;
+            let source_link_node = graph.port_node(link.source).ok_or(LinkError::BadLink)?;
 
             if source_link_node != last_cycle_node {
                 return Err(LinkError::NonAdjacentNodes);
@@ -138,7 +119,7 @@ impl OpenCycle {
         let last_port = self.last_port().ok_or(LinkError::EmptyCycle)?;
 
         let last_node = graph.port_node(*last_port);
-        let first_node = graph.port_node(*self.links()[0].source_as_ref());
+        let first_node = graph.port_node(self.links()[0].source);
 
         if first_node != last_node {
             return Err(LinkError::OpenCycle);
@@ -183,7 +164,7 @@ impl OpenCycle {
 
         // Check if this link closes the cycle
         let first_node = graph
-            .port_node(*self.links()[0].source_as_ref())
+            .port_node(self.links()[0].source)
             .expect("cycle nodes are good");
         if dest_link_node == first_node {
             return Ok(Step::Closes(link));
@@ -199,7 +180,7 @@ impl OpenCycle {
             .iter()
             .map(|l| {
                 graph
-                    .port_node(*l.dest_as_ref())
+                    .port_node(l.dest)
                     .ok_or(LinkError::CycleNodeNotInGraph)
             })
             .collect::<Result<Vec<NodeId>, LinkError>>()?
@@ -218,7 +199,7 @@ impl OpenCycle {
         if self.is_empty() {
             None
         } else {
-            Some(self.links()[self.0.len() - 1].dest_as_ref())
+            Some(&self.links()[self.0.len() - 1].dest)
         }
     }
 }
@@ -513,9 +494,9 @@ mod tests {
     fn link_checked_valid() {
         let (g, t) = triangle();
         let link = Link::new_checked(&g, t.a_out, t.ab, t.b_in).unwrap();
-        assert_eq!(*link.source_as_ref(), t.a_out);
-        assert_eq!(*link.edge_as_ref(), t.ab);
-        assert_eq!(*link.dest_as_ref(), t.b_in);
+        assert_eq!(link.source, t.a_out);
+        assert_eq!(link.edge, t.ab);
+        assert_eq!(link.dest, t.b_in);
     }
 
     #[test]
@@ -644,8 +625,8 @@ mod tests {
         let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
         match oc.classify(&g, t.bc).unwrap() {
             Step::Extends(link) => {
-                assert_eq!(*link.source_as_ref(), t.b_out);
-                assert_eq!(*link.dest_as_ref(), t.c_in);
+                assert_eq!(link.source, t.b_out);
+                assert_eq!(link.dest, t.c_in);
             }
             _ => panic!("expected Extends"),
         }
@@ -659,7 +640,7 @@ mod tests {
             Link::new(t.b_out, t.bc, t.c_in),
         ]); // A->B->C, frontier C
         match oc.classify(&g, t.ca).unwrap() {
-            Step::Closes(link) => assert_eq!(*link.dest_as_ref(), t.a_in),
+            Step::Closes(link) => assert_eq!(link.dest, t.a_in),
             _ => panic!("expected Closes"),
         }
     }
