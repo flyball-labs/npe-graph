@@ -190,6 +190,12 @@ impl ClosedCycle {
             .map(|l| l.link_nodes(graph).1.ok_or(LinkError::CycleNodeNotInGraph))
             .collect::<Result<Vec<NodeId>, LinkError>>()
     }
+
+    /// A simple wrapper function for returning a reference to the vec of
+    /// `Links` contained in the `ClosedCycle`
+    pub fn as_vec_list(&self) -> &[Link] {
+        &self.0
+    }
 }
 
 impl<N, P, E> Graph<N, P, E> {
@@ -283,7 +289,7 @@ impl<N, P, E> Graph<N, P, E> {
     /// Builds a spanning forest with DFS; each edge that closes back onto an
     /// already-visited node yields one fundamental cycle, recovered by walking
     /// the tree path between the back edge's endpoints. O(V + E).
-    pub fn detect_cycles(&self) -> Vec<ClosedCycle> {
+    pub fn find_cycles(&self) -> Vec<ClosedCycle> {
         let mut visited: HashSet<NodeId> = HashSet::new();
         let mut came_via: HashMap<NodeId, Link> = HashMap::new();
         let mut seen_edges: HashSet<EdgeId> = HashSet::new();
@@ -390,7 +396,7 @@ impl<N, P, E> Graph<N, P, E> {
     /// edge set. Worst-case cost is exponential in the number of cycles
     /// (inherent to simple-cycle enumeration), which is fine for the small
     /// schematics this is intended for.
-    pub fn detect_predicated_cycles(
+    pub fn find_predicated_cycles(
         &self,
         intra_predicate: impl Fn(&N, &P, &P) -> bool,
         inter_predicate: impl Fn(&P, &P, &E) -> bool,
