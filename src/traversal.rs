@@ -15,6 +15,7 @@ pub enum LinkError {
 }
 
 /// An ordered link between two adjacencies in a graph
+#[derive(Clone, Copy)]
 pub struct Link {
     pub source: PortId,
     pub edge: EdgeId,
@@ -22,13 +23,13 @@ pub struct Link {
 }
 
 impl Link {
-    fn new(source: PortId, edge: EdgeId, dest: PortId) -> Self {
+    pub fn new(source: PortId, edge: EdgeId, dest: PortId) -> Self {
         Self { source, edge, dest }
     }
 
     /// Emit a new link from a two `PortId`s and an `EdgeId`,
     /// checking that they're connected in the `Graph`
-    fn new_checked<N, P, E>(
+    pub fn new_checked<N, P, E>(
         graph: &Graph<N, P, E>,
         source: PortId,
         edge: EdgeId,
@@ -60,6 +61,16 @@ enum Step {
     RevisitsInterior { link: Link, at: NodeId },
 }
 
+impl Step {
+    /// The resolved link regardless of outcome, for predicate gating.
+    fn link(&self) -> &Link {
+        match self {
+            Step::Extends(l) | Step::Closes(l) => l,
+            Step::RevisitsInterior { link, .. } => link,
+        }
+    }
+}
+
 /// A typestate pattern is used for cycles.
 /// This is the open cycle construct; used for
 /// cycles still being evaluated by a graph walk that
@@ -88,6 +99,18 @@ impl OpenCycle {
 
     fn last_port(&self) -> Option<&PortId> {
         self.0.back().map(|l| &l.dest)
+    }
+
+    /// Edge of the most recently added link (the edge the frontier was
+    /// reached through), for the U-turn guard.
+    fn last_edge(&self) -> Option<EdgeId> {
+        self.0.back().map(|l| l.edge)
+    }
+
+    /// Remove and return the most recently appended link. Used to backtrack a
+    /// frontier extension on DFS unwind.
+    fn pop_back(&mut self) -> Option<Link> {
+        self.0.pop_back()
     }
 
     /// Push a new link into the `Cycle`, checking that the last
@@ -138,52 +161,25 @@ impl OpenCycle {
     }
 
     fn classify<N, P, E>(&self, graph: &Graph<N, P, E>, edge: EdgeId) -> Result<Step, LinkError> {
-        // Get the two endpoints of the edge but we don't yet know which is
-        // the source and which is the destination
-        let (link_port_a, link_port_b) = graph.edge_endpoints(edge).ok_or(LinkError::BadLink)?;
-        let link_node_a = graph.port_node(link_port_a).ok_or(LinkError::BadLink)?;
-        let link_node_b = graph.port_node(link_port_b).ok_or(LinkError::BadLink)?;
-
-        // Check if the passed in edge is incident and error if not
+        // Frontier = the node at the back of the path. Orient `edge` so its
+        // source sits on that node (errors on jumper / non-incident edges).
         let last_cycle_port = self.last_port().ok_or(LinkError::EmptyCycle)?;
-        let last_cycle_node = graph
+        let frontier = graph
             .port_node(*last_cycle_port)
             .expect("cycle nodes are good");
+        let (src, dst, dest_node) = graph.orient_at(frontier, edge)?;
+        let link = Link::new(src, edge, dst);
 
-        // Determine if either, none, or both of the ends of the `Edge`
-        // interface with the final node in the graph
-        let (link, dest_link_node) = match (
-            link_node_a == last_cycle_node,
-            link_node_b == last_cycle_node,
-        ) {
-            (true, true) => return Err(LinkError::JumperEdge),
-            (false, false) => return Err(LinkError::NonAdjacentNodes),
-            (true, false) => {
-                // link_a is the source
-                let link = Link::new(link_port_a, edge, link_port_b);
-                let dest_link_node = graph.port_node(link_port_b).ok_or(LinkError::BadLink)?;
-                (link, dest_link_node)
-            }
-            (false, true) => {
-                // link_b is the source
-                let link = Link::new(link_port_b, edge, link_port_a);
-                let dest_link_node = graph.port_node(link_port_a).ok_or(LinkError::BadLink)?;
-                (link, dest_link_node)
-            }
-        };
-
-        // Check if this link closes the cycle
+        // Closes if the destination is the path's start node.
         let first_port = self.first_port().ok_or(LinkError::EmptyCycle)?;
         let first_node = graph.port_node(*first_port).expect("cycle nodes are good");
-        if dest_link_node == first_node {
+        if dest_node == first_node {
             return Ok(Step::Closes(link));
         }
 
-        // Check if this link revisits an existing node
-        // Since a well-formed Cycle contains each NodeId twice (once at source
-        // and once at dest) this check only has to look at one of them. This
-        // also skips checking the initial Node which means it can't throw a
-        // false positive for a closed cycle (even though that's checked above)
+        // Revisits an interior node. A well-formed path holds each interior
+        // node as some link's dest, so scanning dests suffices; the start node
+        // is only ever a source, so closure can't masquerade as a revisit.
         if self
             .links()
             .map(|l| {
@@ -192,11 +188,11 @@ impl OpenCycle {
                     .ok_or(LinkError::CycleNodeNotInGraph)
             })
             .collect::<Result<Vec<NodeId>, LinkError>>()?
-            .contains(&dest_link_node)
+            .contains(&dest_node)
         {
             return Ok(Step::RevisitsInterior {
                 link,
-                at: dest_link_node,
+                at: dest_node,
             });
         }
         Ok(Step::Extends(link))
@@ -214,7 +210,7 @@ impl ClosedCycle {
     /// into a vector of the `NodeId`s that it contains. This is useful
     /// for cycle analysis tasks that require some accumulation or computation
     /// against the nodes themselves.
-    fn as_node_list<N, P, E>(&self, graph: &Graph<N, P, E>) -> Result<Vec<NodeId>, LinkError> {
+    pub fn as_node_list<N, P, E>(&self, graph: &Graph<N, P, E>) -> Result<Vec<NodeId>, LinkError> {
         self.0
             .iter()
             .map(|l| l.link_nodes(graph).1.ok_or(LinkError::CycleNodeNotInGraph))
@@ -305,37 +301,322 @@ impl<N, P, E> Graph<N, P, E> {
         found
     }
 
-    /// Cutset rank of the component graph, or the number of edges in a
-    /// spanning tree
-    pub fn cutset_rank(&self) -> usize {
-        self.node_count() - 1
-    }
-
-    /// Detect a cycle in the graph.
+    /// Detect every fundamental (independent) cycle in the undirected
+    /// component graph. Returns exactly [`Graph::cycle_rank`] cycles, *minus*
+    /// any jumper self-loops (edges whose two ports share a node), which this
+    /// traversal skips because [`Link`]s are defined between distinct nodes.
+    ///
+    /// Builds a spanning forest with DFS; each edge that closes back onto an
+    /// already-visited node yields one fundamental cycle, recovered by walking
+    /// the tree path between the back edge's endpoints. O(V + E).
     pub fn detect_cycles(&self) -> Vec<ClosedCycle> {
-        todo!();
-        vec![]
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut came_via: HashMap<NodeId, Link> = HashMap::new();
+        let mut seen_edges: HashSet<EdgeId> = HashSet::new();
+        let mut cycles: Vec<ClosedCycle> = Vec::new();
+
+        for (start, _) in self.nodes() {
+            if !visited.contains(&start) {
+                self.fundamental_dfs(
+                    start,
+                    &mut visited,
+                    &mut came_via,
+                    &mut seen_edges,
+                    &mut cycles,
+                );
+            }
+        }
+        cycles
     }
 
-    /// Detect a cycle in the graph, predicated on filter functions.
-    /// This is how one would implement a direcetional cycle search
+    /// Recursive worker for [`Graph::detect_cycles`]. `seen_edges` is the dedup
+    /// mechanism: each edge is processed once, so the parent edge is skipped on
+    /// the look-back, parallel edges each get their own turn, and a given back
+    /// edge is reported from one side only.
+    fn fundamental_dfs(
+        &self,
+        node: NodeId,
+        visited: &mut HashSet<NodeId>,
+        came_via: &mut HashMap<NodeId, Link>,
+        seen_edges: &mut HashSet<EdgeId>,
+        cycles: &mut Vec<ClosedCycle>,
+    ) {
+        visited.insert(node);
+
+        let incident: Vec<EdgeId> = self.node_edges(node).collect();
+        for e in incident {
+            // First time we touch this edge from either end wins; the rest skip.
+            if !seen_edges.insert(e) {
+                continue;
+            }
+
+            // Orient the edge so `source` sits on the current node; skip
+            // jumpers and non-incident edges.
+            let (src_port, dst_port, neighbor) = match self.orient_at(node, e) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            if !visited.contains(&neighbor) {
+                // Tree edge: record how we reached `neighbor` and descend.
+                came_via.insert(neighbor, Link::new(src_port, e, dst_port));
+                self.fundamental_dfs(neighbor, visited, came_via, seen_edges, cycles);
+            } else {
+                // Back edge: reconstruct the fundamental cycle. Seed with the
+                // back edge (front = node, back = neighbor), then walk parent
+                // pointers from `node` up to `neighbor`; each link prepends.
+                let mut links = vec![Link::new(src_port, e, dst_port)];
+                let mut cursor = node;
+                let mut ok = true;
+                while cursor != neighbor {
+                    match came_via.get(&cursor) {
+                        Some(&link) => match self.port_node(link.source) {
+                            Some(parent) => {
+                                links.push(link);
+                                cursor = parent;
+                            }
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        },
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    if let Ok(cycle) = self.close_link_path(links) {
+                        cycles.push(cycle);
+                    } else {
+                        debug_assert!(false, "fundamental cycle failed to close");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Detect cycles in the graph, predicated on filter functions.
+    /// This is how one would implement a directional cycle search
     /// or filter out non-functional nodes.
     ///
     /// There are two functions for the two modes of traversal in an
     /// NPE graph.
     /// `intra` is the function that runs to determine if the
-    /// traversal should continue within a node, from one port to another
-    /// port.
+    /// traversal should continue within a node, from one port (the one
+    /// just entered) to another port (a candidate exit).
     /// `inter` is the function that runs to determine if the
     /// traversal should continue between one port, through the edge, and
     /// to another port.
+    ///
+    /// Because the predicates make traversal directional, this enumerates
+    /// *directed simple cycles* rather than fundamental cycles: a DFS is
+    /// rooted at every node and discovered cycles are de-duplicated by their
+    /// edge set. Worst-case cost is exponential in the number of cycles
+    /// (inherent to simple-cycle enumeration), which is fine for the small
+    /// schematics this is intended for.
     pub fn detect_predicated_cycles(
         &self,
         intra_predicate: impl Fn(&N, &P, &P) -> bool,
         inter_predicate: impl Fn(&P, &P, &E) -> bool,
     ) -> Vec<ClosedCycle> {
-        todo!()
-        // vec![]
+        let mut out: Vec<ClosedCycle> = Vec::new();
+        let mut seen_cycles: HashSet<Vec<EdgeId>> = HashSet::new();
+
+        for (s, _) in self.nodes() {
+            // First hop out of the start node. No up-front intra check here —
+            // the single pass-through of `s` is validated at closure, where we
+            // know both the entry port and the exit port `p0`.
+            let start_ports: Vec<PortId> = self.ports(s).collect();
+            for p0 in start_ports {
+                let first_edges: Vec<EdgeId> = self.port_edges(p0).collect();
+                for e0 in first_edges {
+                    let enter = match self.opposite(e0, p0) {
+                        Some(x) => x,
+                        None => continue,
+                    };
+                    let m = match self.port_node(enter) {
+                        Some(x) => x,
+                        None => continue,
+                    };
+                    if m == s {
+                        continue; // jumper / self-loop
+                    }
+                    if !self.inter_ok(&inter_predicate, p0, enter, e0) {
+                        continue;
+                    }
+
+                    // Seed an OpenCycle with the first link and walk from `m`.
+                    let mut open = OpenCycle::new();
+                    if open.try_extend(self, Link::new(p0, e0, enter)).is_err() {
+                        continue;
+                    }
+                    self.predicated_dfs(
+                        s,
+                        p0,
+                        m,
+                        enter,
+                        &intra_predicate,
+                        &inter_predicate,
+                        &mut open,
+                        &mut seen_cycles,
+                        &mut out,
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// Recursive worker for [`Graph::detect_predicated_cycles`].
+    ///
+    /// `s`/`p0` pin the cycle's start node and its first exit port so the
+    /// closing step can validate the pass-through of `s`. `node`/`enter` are
+    /// the current frontier: the node we're on and the port we arrived through.
+    #[allow(clippy::too_many_arguments)]
+    fn predicated_dfs<I, J>(
+        &self,
+        s: NodeId,
+        p0: PortId,
+        node: NodeId,
+        enter: PortId,
+        intra: &I,
+        inter: &J,
+        open: &mut OpenCycle,
+        seen_cycles: &mut HashSet<Vec<EdgeId>>,
+        out: &mut Vec<ClosedCycle>,
+    ) where
+        I: Fn(&N, &P, &P) -> bool,
+        J: Fn(&P, &P, &E) -> bool,
+    {
+        // Never immediately re-traverse the edge we arrived on; a U-turn would
+        // otherwise close a spurious 2-cycle under a symmetric `inter`.
+        let entering_edge = open.last_edge();
+
+        let exit_ports: Vec<PortId> = self.ports(node).collect();
+        for exit_p in exit_ports {
+            // Pass through `node`: entered via `enter`, leaving via `exit_p`.
+            if !self.intra_ok(intra, node, enter, exit_p) {
+                continue;
+            }
+            let edges: Vec<EdgeId> = self.port_edges(exit_p).collect();
+            for e in edges {
+                if Some(e) == entering_edge {
+                    continue;
+                }
+                // Structural classification against the current frontier.
+                let step = match open.classify(self, e) {
+                    Ok(step) => step,
+                    Err(_) => continue, // jumper / non-adjacent
+                };
+                let link = *step.link();
+                // Gate the crossing with the inter predicate.
+                if !self.inter_ok(inter, link.source, link.dest, link.edge) {
+                    continue;
+                }
+
+                match step {
+                    Step::Closes(_) => {
+                        // Validate the pass-through of `s`: enter via the
+                        // closing link's dest port, leave via `p0`.
+                        if self.intra_ok(intra, s, link.dest, p0) {
+                            let mut key: Vec<EdgeId> = open
+                                .links()
+                                .map(|l| l.edge)
+                                .chain(std::iter::once(link.edge))
+                                .collect();
+                            key.sort();
+                            if seen_cycles.insert(key) {
+                                let mut full: Vec<Link> = open.links().copied().collect();
+                                full.push(link);
+                                if let Ok(cycle) = self.close_link_path(full) {
+                                    out.push(cycle);
+                                } else {
+                                    debug_assert!(false, "predicated cycle failed to close");
+                                }
+                            }
+                        }
+                    }
+                    Step::RevisitsInterior { .. } => {
+                        // Already on the path (and not the start): skip to keep
+                        // the cycle simple.
+                    }
+                    Step::Extends(_) => {
+                        let neighbor = match self.port_node(link.dest) {
+                            Some(x) => x,
+                            None => continue,
+                        };
+                        if open.try_extend(self, link).is_err() {
+                            continue;
+                        }
+                        self.predicated_dfs(
+                            s,
+                            p0,
+                            neighbor,
+                            link.dest,
+                            intra,
+                            inter,
+                            open,
+                            seen_cycles,
+                            out,
+                        );
+                        open.pop_back();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Build a [`ClosedCycle`] from an ordered chain of links that is known to
+    /// form a closed loop. Feeds them through [`OpenCycle::try_extend`] (whose
+    /// bidirectional logic handles prepend vs append) and closes.
+    fn close_link_path(&self, links: Vec<Link>) -> Result<ClosedCycle, LinkError> {
+        let mut open = OpenCycle::new();
+        for link in links {
+            open.try_extend(self, link)?;
+        }
+        open.try_into_closed(self)
+    }
+
+    /// Orient `edge` relative to `node`: returns the port on `node` (the
+    /// source), the port on the far end (the dest), and the neighbor node.
+    /// Shared by [`OpenCycle::classify`] and the fundamental-cycle DFS so the
+    /// "which end is mine / is this a jumper" logic lives in one place.
+    fn orient_at(&self, node: NodeId, edge: EdgeId) -> Result<(PortId, PortId, NodeId), LinkError> {
+        let (pa, pb) = self.edge_endpoints(edge).ok_or(LinkError::BadLink)?;
+        let na = self.port_node(pa);
+        let nb = self.port_node(pb);
+        match (na == Some(node), nb == Some(node)) {
+            (true, true) => Err(LinkError::JumperEdge),
+            (true, false) => Ok((pa, pb, nb.ok_or(LinkError::BadLink)?)),
+            (false, true) => Ok((pb, pa, na.ok_or(LinkError::BadLink)?)),
+            (false, false) => Err(LinkError::NonAdjacentNodes),
+        }
+    }
+
+    /// Apply the intra predicate, resolving node/port data. Missing data (a
+    /// stale id) reads as "not traversable".
+    fn intra_ok<I>(&self, intra: &I, node: NodeId, enter: PortId, exit: PortId) -> bool
+    where
+        I: Fn(&N, &P, &P) -> bool,
+    {
+        match (self.node(node), self.port(enter), self.port(exit)) {
+            (Some(n), Some(pe), Some(px)) => intra(n, pe, px),
+            _ => false,
+        }
+    }
+
+    /// Apply the inter predicate, resolving port/edge data. Missing data reads
+    /// as "not traversable".
+    fn inter_ok<J>(&self, inter: &J, from: PortId, to: PortId, edge: EdgeId) -> bool
+    where
+        J: Fn(&P, &P, &E) -> bool,
+    {
+        match (self.port(from), self.port(to), self.edge(edge)) {
+            (Some(pf), Some(pt), Some(ed)) => inter(pf, pt, ed),
+            _ => false,
+        }
     }
 }
 
@@ -722,11 +1003,10 @@ mod tests {
         assert!(matches!(oc.classify(&g, t.ab), Err(LinkError::EmptyCycle)));
     }
 
-    // ── detection spec (pending implementation) ──────────────────────────────
-    // These encode the intended behavior of the stubbed search functions.
-    // Flip off `#[ignore]` as each lands.
+    // ── detection ────────────────────────────────────────────────────────────
+    // Behavior of detect_cycles (undirected fundamental cycles) and
+    // detect_predicated_cycles (directed simple cycles).
     #[test]
-    #[ignore = "detect_cycles is todo!()"]
     fn detect_triangle_one_cycle() {
         let (g, t) = triangle();
         let cycles = g.detect_cycles();
@@ -738,7 +1018,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "detect_cycles is todo!()"]
     fn detect_tree_no_cycle() {
         let mut g: TG = Graph::new();
         let (a, b, c) = (node(&mut g, "A"), node(&mut g, "B"), node(&mut g, "C"));
@@ -750,7 +1029,53 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "detect_predicated_cycles is todo!()"]
+    fn detect_parallel_edges_one_cycle() {
+        // Two wires between A and B form a single 2-node loop.
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (a1, a2) = (port(&mut g, a, "a1"), port(&mut g, a, "a2"));
+        let (b1, b2) = (port(&mut g, b, "b1"), port(&mut g, b, "b2"));
+        wire(&mut g, a1, b1);
+        wire(&mut g, a2, b2);
+        let cycles = g.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(
+            nodeset(cycles[0].as_node_list(&g).unwrap()),
+            nodeset(vec![a, b])
+        );
+    }
+
+    #[test]
+    fn detect_figure_eight_two_cycles() {
+        // Two triangles sharing node A: cycle_rank 2, so two fundamental cycles.
+        let (mut g, t) = triangle();
+        let (d, e) = (node(&mut g, "D"), node(&mut g, "E"));
+        let a_x = port(&mut g, t.a, "a_x");
+        let a_y = port(&mut g, t.a, "a_y");
+        let (d1, d2) = (port(&mut g, d, "d1"), port(&mut g, d, "d2"));
+        let (e1, e2) = (port(&mut g, e, "e1"), port(&mut g, e, "e2"));
+        wire(&mut g, a_x, d1);
+        wire(&mut g, d2, e1);
+        wire(&mut g, e2, a_y);
+        assert_eq!(g.detect_cycles().len(), 2);
+        assert_eq!(g.detect_cycles().len() as usize, g.cycle_rank());
+    }
+
+    #[test]
+    fn predicated_no_valid_direction_no_cycle() {
+        // Same feedback pair, but inter never permits a crossing.
+        let mut g: TG = Graph::new();
+        let (a, b) = (node(&mut g, "A"), node(&mut g, "B"));
+        let (a_in, a_out) = (port(&mut g, a, "in"), port(&mut g, a, "out"));
+        let (b_in, b_out) = (port(&mut g, b, "in"), port(&mut g, b, "out"));
+        wire(&mut g, a_out, b_in);
+        wire(&mut g, b_out, a_in);
+        let intra = |_n: &&str, _p: &&str, _q: &&str| true;
+        let inter = |_f: &&str, _t: &&str, _e: &&str| false;
+        assert_eq!(g.detect_predicated_cycles(intra, inter).len(), 0);
+    }
+
+    #[test]
     fn detect_directed_feedback_pair() {
         // A.out -> B.in, B.out -> A.in : a directed 2-cycle under output->input.
         let mut g: TG = Graph::new();
