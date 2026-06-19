@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn detect_triangle_one_cycle() {
         let (g, t) = triangle();
-        let cycles = g.detect_cycles();
+        let cycles = g.find_cycles();
         assert_eq!(cycles.len(), 1);
         assert_eq!(
             nodeset(cycles[0].as_node_list(&g).unwrap()),
@@ -973,7 +973,7 @@ mod tests {
         wire(&mut g, pa, pb1);
         let (pb2, pc) = (port(&mut g, b, "b2"), port(&mut g, c, "c"));
         wire(&mut g, pb2, pc);
-        assert_eq!(g.detect_cycles().len(), 0);
+        assert_eq!(g.find_cycles().len(), 0);
     }
 
     #[test]
@@ -985,7 +985,7 @@ mod tests {
         let (b1, b2) = (port(&mut g, b, "b1"), port(&mut g, b, "b2"));
         wire(&mut g, a1, b1);
         wire(&mut g, a2, b2);
-        let cycles = g.detect_cycles();
+        let cycles = g.find_cycles();
         assert_eq!(cycles.len(), 1);
         assert_eq!(
             nodeset(cycles[0].as_node_list(&g).unwrap()),
@@ -1005,8 +1005,8 @@ mod tests {
         wire(&mut g, a_x, d1);
         wire(&mut g, d2, e1);
         wire(&mut g, e2, a_y);
-        assert_eq!(g.detect_cycles().len(), 2);
-        assert_eq!(g.detect_cycles().len(), g.cycle_rank());
+        assert_eq!(g.find_cycles().len(), 2);
+        assert_eq!(g.find_cycles().len(), g.cycle_rank());
     }
 
     #[test]
@@ -1020,7 +1020,7 @@ mod tests {
         wire(&mut g, b_out, a_in);
         let intra = |_n: &&str, _p: &&str, _q: &&str| true;
         let inter = |_f: &&str, _t: &&str, _e: &&str| false;
-        assert_eq!(g.detect_predicated_cycles(intra, inter).len(), 0);
+        assert_eq!(g.find_predicated_cycles(intra, inter).len(), 0);
     }
 
     #[test]
@@ -1034,7 +1034,7 @@ mod tests {
         wire(&mut g, b_out, a_in);
         let intra = |_n: &&str, _p: &&str, _q: &&str| true;
         let inter = |from: &&str, _to: &&str, _e: &&str| *from == "out";
-        let cycles = g.detect_predicated_cycles(intra, inter);
+        let cycles = g.find_predicated_cycles(intra, inter);
         assert_eq!(cycles.len(), 1);
     }
 }
