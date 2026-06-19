@@ -35,13 +35,10 @@ impl Link {
         dest: PortId,
     ) -> Result<Link, LinkError> {
         if !graph
-            .port_edges(source.clone())
+            .port_edges(source)
             .collect::<Vec<EdgeId>>()
             .contains(&edge)
-            || !graph
-                .port_edges(dest.clone())
-                .collect::<Vec<EdgeId>>()
-                .contains(&edge)
+            || !graph.port_edges(dest).any(|e| e == edge)
         {
             Err(LinkError::BadLink)
         } else if graph.port_node(dest) == graph.port_node(source) {
@@ -313,7 +310,7 @@ impl<N, P, E> Graph<N, P, E> {
     }
 
     /// Detect a cycle in the graph.
-    fn detect_cycles(&self) -> Vec<ClosedCycle> {
+    pub fn detect_cycles(&self) -> Vec<ClosedCycle> {
         todo!();
         vec![]
     }
@@ -330,7 +327,7 @@ impl<N, P, E> Graph<N, P, E> {
     /// `inter` is the function that runs to determine if the
     /// traversal should continue between one port, through the edge, and
     /// to another port.
-    fn detect_predicated_cycles(
+    pub fn detect_predicated_cycles(
         &self,
         intra_predicate: impl Fn(&N, &P, &P) -> bool,
         inter_predicate: impl Fn(&P, &P, &E) -> bool,
