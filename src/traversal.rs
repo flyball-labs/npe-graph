@@ -970,7 +970,7 @@ mod tests {
         ]);
         match oc.classify(&g, cb).unwrap() {
             Step::RevisitsInterior { at, .. } => assert_eq!(at, t.b),
-            other => panic!("expected RevisitsInterior at B"),
+            _other => panic!("expected RevisitsInterior at B"),
         }
     }
 
