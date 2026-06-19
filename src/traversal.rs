@@ -34,10 +34,7 @@ impl Link {
         edge: EdgeId,
         dest: PortId,
     ) -> Result<Link, LinkError> {
-        if !graph
-            .port_edges(source)
-            .collect::<Vec<EdgeId>>()
-            .contains(&edge)
+        if !graph.port_edges(source).any(|e| e == edge)
             || !graph.port_edges(dest).any(|e| e == edge)
         {
             Err(LinkError::BadLink)
@@ -63,23 +60,21 @@ enum Step {
     RevisitsInterior { link: Link, at: NodeId },
 }
 
-impl OpenCycle {}
-
 /// A typestate pattern is used for cycles.
 /// This is the open cycle construct; used for
 /// cycles still being evaluated by a graph walk that
 /// haven't yet been found to be closed.
-pub struct OpenCycle(Vec<Link>);
+pub struct OpenCycle(VecDeque<Link>);
 
 impl OpenCycle {
     /// Create a new empty cycle
     fn new() -> Self {
-        Self(vec![])
+        Self(VecDeque::new())
     }
 
     /// Return the links
-    fn links(&self) -> &[Link] {
-        &self.0
+    fn links(&self) -> impl Iterator<Item = &Link> + '_ {
+        self.0.iter()
     }
 
     /// Check if the cycle is new/empty
@@ -87,25 +82,40 @@ impl OpenCycle {
         self.0.len() == 0
     }
 
+    fn first_port(&self) -> Option<&PortId> {
+        self.0.front().map(|l| &l.source)
+    }
+
+    fn last_port(&self) -> Option<&PortId> {
+        self.0.back().map(|l| &l.dest)
+    }
+
     /// Push a new link into the `Cycle`, checking that the last
     /// destination node is the new source node
     fn try_extend<N, P, E>(&mut self, graph: &Graph<N, P, E>, link: Link) -> Result<(), LinkError> {
-        // Lookup some ports and nodes on this cycle
-        if !self.is_empty() {
-            // If the cycle is not empty then run some checks
-            let last_cycle_port = self.last_port().expect("the cycle is checked non-empty");
-            let last_cycle_node = graph
-                .port_node(*last_cycle_port)
-                .expect("links in the cycle have been checked good");
-
-            let source_link_node = graph.port_node(link.source).ok_or(LinkError::BadLink)?;
-
-            if source_link_node != last_cycle_node {
-                return Err(LinkError::NonAdjacentNodes);
-            }
+        if self.is_empty() {
+            self.0.push_back(link);
+            return Ok(());
         }
-        self.0.push(link);
-        return Ok(());
+
+        let link_src_node = graph.port_node(link.source).ok_or(LinkError::BadLink)?;
+        let link_dst_node = graph.port_node(link.dest).ok_or(LinkError::BadLink)?;
+
+        let first_port = self.first_port().ok_or(LinkError::EmptyCycle)?;
+        let last_port = self.last_port().ok_or(LinkError::EmptyCycle)?;
+
+        let first_node = graph.port_node(*first_port).expect("cycle is non-empty");
+        let last_node = graph.port_node(*last_port).expect("cycle is non-empty");
+
+        if link_src_node == last_node {
+            self.0.push_back(link);
+        } else if link_dst_node == first_node {
+            self.0.push_front(link);
+        } else {
+            return Err(LinkError::NonAdjacentNodes);
+        }
+
+        Ok(())
     }
 
     /// Attempt to close the cycle, checking that the last node
@@ -114,14 +124,17 @@ impl OpenCycle {
     /// then this will be unnecessary and needlessly adds to run time.
     fn try_into_closed<N, P, E>(self, graph: &Graph<N, P, E>) -> Result<ClosedCycle, LinkError> {
         let last_port = self.last_port().ok_or(LinkError::EmptyCycle)?;
+        let first_port = self.first_port().ok_or(LinkError::EmptyCycle)?;
 
         let last_node = graph.port_node(*last_port);
-        let first_node = graph.port_node(self.links()[0].source);
+        let first_node = graph.port_node(*first_port);
 
         if first_node != last_node {
             return Err(LinkError::OpenCycle);
         }
-        Ok(ClosedCycle { 0: self.0 })
+        Ok(ClosedCycle {
+            0: self.0.into_iter().collect(),
+        })
     }
 
     fn classify<N, P, E>(&self, graph: &Graph<N, P, E>, edge: EdgeId) -> Result<Step, LinkError> {
@@ -160,9 +173,8 @@ impl OpenCycle {
         };
 
         // Check if this link closes the cycle
-        let first_node = graph
-            .port_node(self.links()[0].source)
-            .expect("cycle nodes are good");
+        let first_port = self.first_port().ok_or(LinkError::EmptyCycle)?;
+        let first_node = graph.port_node(*first_port).expect("cycle nodes are good");
         if dest_link_node == first_node {
             return Ok(Step::Closes(link));
         }
@@ -174,7 +186,6 @@ impl OpenCycle {
         // false positive for a closed cycle (even though that's checked above)
         if self
             .links()
-            .iter()
             .map(|l| {
                 graph
                     .port_node(l.dest)
@@ -189,15 +200,6 @@ impl OpenCycle {
             });
         }
         Ok(Step::Extends(link))
-    }
-
-    /// Return the last `PortId` in the cycle
-    fn last_port(&self) -> Option<&PortId> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(&self.links()[self.0.len() - 1].dest)
-        }
     }
 }
 
