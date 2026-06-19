@@ -411,6 +411,14 @@ mod tests {
         v
     }
 
+    /// Build an `OpenCycle` directly from a list of links, bypassing the
+    /// adjacency checks in `try_extend`. Tests use this to set up a known
+    /// cycle state; it mirrors the old `OpenCycle(vec![..])` construction
+    /// now that the backing store is a `VecDeque`.
+    fn open_cycle(links: impl IntoIterator<Item = Link>) -> OpenCycle {
+        OpenCycle(links.into_iter().collect())
+    }
+
     // ── cycle_rank / connected_components ────────────────────────────────────
     #[test]
     fn rank_empty_and_singletons() {
@@ -566,7 +574,7 @@ mod tests {
     fn try_extend_adjacent_succeeds() {
         let (g, t) = triangle();
         // Seed directly (the only way to insert link #1 today).
-        let mut oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]);
+        let mut oc = open_cycle([Link::new(t.a_out, t.ab, t.b_in)]);
         let next = Link::new(t.b_out, t.bc, t.c_in);
         assert!(oc.try_extend(&g, next).is_ok());
         assert_eq!(oc.last_port(), Some(&t.c_in));
@@ -574,21 +582,44 @@ mod tests {
 
     #[test]
     fn try_extend_non_adjacent_rejected() {
-        let (g, t) = triangle();
-        let mut oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]);
-        // frontier is B; this link sources from C, not B.
-        let bad = Link::new(t.c_out, t.ca, t.a_in);
+        // With bidirectional try_extend, a link is rejected only when it's
+        // adjacent to NEITHER end of the current path. Seed a single-link
+        // cycle A->B (front A, back B), then offer a link on a separate D->E
+        // edge that touches neither A nor B.
+        let (mut g, t) = triangle();
+        let (d, e) = (node(&mut g, "D"), node(&mut g, "E"));
+        let (d_out, e_in) = (port(&mut g, d, "d_out"), port(&mut g, e, "e_in"));
+        let de = wire(&mut g, d_out, e_in);
+
+        let mut oc = open_cycle([Link::new(t.a_out, t.ab, t.b_in)]);
+        // link sources from D and ends at E; neither is the front (A) or back (B).
+        let bad = Link::new(d_out, de, e_in);
         assert!(matches!(
             oc.try_extend(&g, bad),
             Err(LinkError::NonAdjacentNodes)
         ));
     }
 
+    #[test]
+    fn try_extend_front_extends_path() {
+        // The mirror of the back-extension case: a link whose dest node equals
+        // the cycle's front node should be prepended, not rejected.
+        let (g, t) = triangle();
+        // Seed with B->C (front B, back C).
+        let mut oc = open_cycle([Link::new(t.b_out, t.bc, t.c_in)]);
+        // A->B: dest node B == front node, so this prepends.
+        let front = Link::new(t.a_out, t.ab, t.b_in);
+        assert!(oc.try_extend(&g, front).is_ok());
+        // Front is now A, back still C.
+        assert_eq!(oc.first_port(), Some(&t.a_out));
+        assert_eq!(oc.last_port(), Some(&t.c_in));
+    }
+
     // ── try_into_closed ───────────────────────────────────────────────────────
     #[test]
     fn close_open_path_errors() {
         let (g, t) = triangle();
-        let oc = OpenCycle(vec![
+        let oc = open_cycle([
             Link::new(t.a_out, t.ab, t.b_in),
             Link::new(t.b_out, t.bc, t.c_in),
         ]); // A->B->C, not closed
@@ -605,7 +636,7 @@ mod tests {
     #[test]
     fn close_full_triangle_succeeds() {
         let (g, t) = triangle();
-        let oc = OpenCycle(vec![
+        let oc = open_cycle([
             Link::new(t.a_out, t.ab, t.b_in),
             Link::new(t.b_out, t.bc, t.c_in),
             Link::new(t.c_out, t.ca, t.a_in),
@@ -621,7 +652,7 @@ mod tests {
     #[test]
     fn classify_extends() {
         let (g, t) = triangle();
-        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        let oc = open_cycle([Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
         match oc.classify(&g, t.bc).unwrap() {
             Step::Extends(link) => {
                 assert_eq!(link.source, t.b_out);
@@ -634,7 +665,7 @@ mod tests {
     #[test]
     fn classify_closes() {
         let (g, t) = triangle();
-        let oc = OpenCycle(vec![
+        let oc = open_cycle([
             Link::new(t.a_out, t.ab, t.b_in),
             Link::new(t.b_out, t.bc, t.c_in),
         ]); // A->B->C, frontier C
@@ -652,7 +683,7 @@ mod tests {
         let b_alt = port(&mut g, t.b, "b_alt");
         let c_alt = port(&mut g, t.c, "c_alt");
         let cb = wire(&mut g, c_alt, b_alt); // C -> B back-edge
-        let oc = OpenCycle(vec![
+        let oc = open_cycle([
             Link::new(t.a_out, t.ab, t.b_in),
             Link::new(t.b_out, t.bc, t.c_in),
         ]);
@@ -665,7 +696,7 @@ mod tests {
     #[test]
     fn classify_non_adjacent() {
         let (g, t) = triangle();
-        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        let oc = open_cycle([Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
         // edge `ca` touches C and A, not B.
         assert!(matches!(
             oc.classify(&g, t.ca),
@@ -680,7 +711,7 @@ mod tests {
         let bx = port(&mut g, t.b, "bx");
         let by = port(&mut g, t.b, "by");
         let jmp = wire(&mut g, bx, by);
-        let oc = OpenCycle(vec![Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
+        let oc = open_cycle([Link::new(t.a_out, t.ab, t.b_in)]); // frontier B
         assert!(matches!(oc.classify(&g, jmp), Err(LinkError::JumperEdge)));
     }
 
