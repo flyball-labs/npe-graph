@@ -15,7 +15,7 @@ pub enum LinkError {
 }
 
 /// An ordered link between two adjacencies in a graph
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Link {
     pub source: PortId,
     pub edge: EdgeId,
@@ -25,26 +25,6 @@ pub struct Link {
 impl Link {
     pub fn new(source: PortId, edge: EdgeId, dest: PortId) -> Self {
         Self { source, edge, dest }
-    }
-
-    /// Emit a new link from a two `PortId`s and an `EdgeId`,
-    /// checking that they're connected in the `Graph`
-    pub fn new_checked<N, P, E>(
-        graph: &Graph<N, P, E>,
-        source: PortId,
-        edge: EdgeId,
-        dest: PortId,
-    ) -> Result<Link, LinkError> {
-        if !graph.port_edges(source).any(|e| e == edge)
-            || !graph.port_edges(dest).any(|e| e == edge)
-        {
-            Err(LinkError::BadLink)
-        } else if graph.port_node(dest) == graph.port_node(source) {
-            // No jumper edges allowed
-            return Err(LinkError::JumperEdge);
-        } else {
-            Ok(Link::new(source, edge, dest))
-        }
     }
 
     /// Return the nodes on either end of the `Link`
@@ -58,15 +38,14 @@ impl Link {
 enum Step {
     Extends(Link),
     Closes(Link),
-    RevisitsInterior { link: Link, at: NodeId },
+    RevisitsInterior(Link),
 }
 
 impl Step {
     /// The resolved link regardless of outcome, for predicate gating.
     fn link(&self) -> &Link {
         match self {
-            Step::Extends(l) | Step::Closes(l) => l,
-            Step::RevisitsInterior { link, .. } => link,
+            Step::Extends(l) | Step::Closes(l) | Step::RevisitsInterior(l) => l,
         }
     }
 }
@@ -155,9 +134,7 @@ impl OpenCycle {
         if first_node != last_node {
             return Err(LinkError::OpenCycle);
         }
-        Ok(ClosedCycle {
-            0: self.0.into_iter().collect(),
-        })
+        Ok(ClosedCycle(self.0.into_iter().collect()))
     }
 
     fn classify<N, P, E>(&self, graph: &Graph<N, P, E>, edge: EdgeId) -> Result<Step, LinkError> {
@@ -190,10 +167,7 @@ impl OpenCycle {
             .collect::<Result<Vec<NodeId>, LinkError>>()?
             .contains(&dest_node)
         {
-            return Ok(Step::RevisitsInterior {
-                link,
-                at: dest_node,
-            });
+            return Ok(Step::RevisitsInterior(link));
         }
         Ok(Step::Extends(link))
     }
@@ -259,11 +233,11 @@ impl<N, P, E> Graph<N, P, E> {
         visited.insert(start);
 
         while let Some(node) = queue.pop_front() {
-            if self.node(node).is_some_and(|n_data| predicate(n_data)) {
+            if self.node(node).is_some_and(&predicate) {
                 found.push(node)
             }
 
-            self.neighbors(node).into_iter().for_each(|ne| {
+            self.neighbors(node).for_each(|ne| {
                 if !visited.contains(&ne) {
                     visited.insert(ne);
                     queue.push_back(ne);
@@ -287,11 +261,11 @@ impl<N, P, E> Graph<N, P, E> {
             }
             visited.insert(node);
 
-            if self.node(node).is_some_and(|n_data| predicate(n_data)) {
+            if self.node(node).is_some_and(&predicate) {
                 found.push(node)
             }
 
-            self.neighbors(node).into_iter().for_each(|ne| {
+            self.neighbors(node).for_each(|ne| {
                 if !visited.contains(&ne) {
                     stack.push(ne);
                 }
@@ -777,38 +751,6 @@ mod tests {
         assert_eq!(g.cycle_rank(), 2);
     }
 
-    // ── Link::new_checked ─────────────────────────────────────────────────────
-    #[test]
-    fn link_checked_valid() {
-        let (g, t) = triangle();
-        let link = Link::new_checked(&g, t.a_out, t.ab, t.b_in).unwrap();
-        assert_eq!(link.source, t.a_out);
-        assert_eq!(link.edge, t.ab);
-        assert_eq!(link.dest, t.b_in);
-    }
-
-    #[test]
-    fn link_checked_non_incident_is_bad() {
-        let (g, t) = triangle();
-        // edge `bc` is not incident to a_out / b_in
-        assert!(matches!(
-            Link::new_checked(&g, t.a_out, t.bc, t.b_in),
-            Err(LinkError::BadLink)
-        ));
-    }
-
-    #[test]
-    fn link_checked_jumper_rejected() {
-        let mut g: TG = Graph::new();
-        let a = node(&mut g, "A");
-        let (p1, p2) = (port(&mut g, a, "p1"), port(&mut g, a, "p2"));
-        let j = wire(&mut g, p1, p2);
-        assert!(matches!(
-            Link::new_checked(&g, p1, j, p2),
-            Err(LinkError::JumperEdge)
-        ));
-    }
-
     #[test]
     fn link_nodes_resolves_both_ends() {
         let (g, t) = triangle();
@@ -969,7 +911,7 @@ mod tests {
             Link::new(t.b_out, t.bc, t.c_in),
         ]);
         match oc.classify(&g, cb).unwrap() {
-            Step::RevisitsInterior { at, .. } => assert_eq!(at, t.b),
+            Step::RevisitsInterior(link) => assert_eq!(link.dest, b_alt),
             _other => panic!("expected RevisitsInterior at B"),
         }
     }
@@ -1058,7 +1000,7 @@ mod tests {
         wire(&mut g, d2, e1);
         wire(&mut g, e2, a_y);
         assert_eq!(g.detect_cycles().len(), 2);
-        assert_eq!(g.detect_cycles().len() as usize, g.cycle_rank());
+        assert_eq!(g.detect_cycles().len(), g.cycle_rank());
     }
 
     #[test]
