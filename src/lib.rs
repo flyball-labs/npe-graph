@@ -51,6 +51,7 @@ mod graph;
 mod id;
 mod library;
 mod net;
+mod traversal;
 
 #[cfg(feature = "petgraph")]
 mod interop;
