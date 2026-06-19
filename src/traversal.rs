@@ -1,6 +1,6 @@
 //! Graph traversal algorithms
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{EdgeId, NodeId, PortId, graph::Graph};
 
@@ -89,7 +89,7 @@ impl OpenCycle {}
 /// This is the open cycle construct; used for
 /// cycles still being evaluated by a graph walk that
 /// haven't yet been found to be closed.
-struct OpenCycle(Vec<Link>);
+pub struct OpenCycle(Vec<Link>);
 
 impl OpenCycle {
     /// Create a new empty cycle
@@ -227,7 +227,7 @@ impl OpenCycle {
 /// closed loop. This typestate pattern ensures that any consumer
 /// that wants to run analysis on closed cycles never needs to check
 /// whether the cycle it's holding is closed or open
-struct ClosedCycle(Vec<Link>);
+pub struct ClosedCycle(Vec<Link>);
 
 impl ClosedCycle {
     /// Convert a `ClosedCycle` (a list of `PortId`-`EdgeId`-`PortId` links)
@@ -273,10 +273,68 @@ impl<N, P, E> Graph<N, P, E> {
         (e + c).saturating_sub(v)
     }
 
+    /// Perform a breadth first search on the graph, returning the
+    /// nodes whose data matches the `predicate` Fn argument
+    pub fn bfs(&self, start: NodeId, predicate: impl Fn(&N) -> bool) -> Vec<NodeId> {
+        let mut visited = HashSet::new();
+        let mut found: Vec<NodeId> = vec![];
+        let mut queue: VecDeque<NodeId> = VecDeque::from([start]);
+
+        visited.insert(start);
+
+        while let Some(node) = queue.pop_front() {
+            if self.node(node).is_some_and(|n_data| predicate(n_data)) {
+                found.push(node)
+            }
+
+            self.neighbors(node).into_iter().for_each(|ne| {
+                if !visited.contains(&ne) {
+                    visited.insert(ne);
+                    queue.push_back(ne);
+                }
+            })
+        }
+
+        found
+    }
+
+    /// Perform a depth first search on the graph, returning the
+    /// nodes whose data matches the `predicate` Fn argument
+    pub fn dfs(&self, start: NodeId, predicate: impl Fn(&N) -> bool) -> Vec<NodeId> {
+        let mut visited = HashSet::new();
+        let mut found: Vec<NodeId> = vec![];
+        let mut stack: Vec<NodeId> = vec![start];
+
+        while let Some(node) = stack.pop() {
+            if visited.contains(&node) {
+                continue;
+            }
+            visited.insert(node);
+
+            if self.node(node).is_some_and(|n_data| predicate(n_data)) {
+                found.push(node)
+            }
+
+            self.neighbors(node).into_iter().for_each(|ne| {
+                if !visited.contains(&ne) {
+                    stack.push(ne);
+                }
+            })
+        }
+
+        found
+    }
+
+    /// Cutset rank of the component graph, or the number of edges in a
+    /// spanning tree
+    pub fn cutset_rank(&self) -> usize {
+        self.node_count() - 1
+    }
+
     /// Detect a cycle in the graph.
     fn detect_cycles(&self) -> Vec<ClosedCycle> {
-        todo!()
-        // vec![]
+        todo!();
+        vec![]
     }
 
     /// Detect a cycle in the graph, predicated on filter functions.
