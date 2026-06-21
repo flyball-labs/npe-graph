@@ -28,7 +28,7 @@ assert!(g.contains_port(r1_a)); // unrelated IDs unaffected
 
 ## Why a new graph library?
 
-There are some terrific graph libraries in the Rust ecosystem, including classic hits such as `petgraph`. So why create a new graph structure crate?
+There are some terrific graph libraries in the Rust ecosystem, including classic hits such as [`petgraph`](https://crates.io/crates/petgraph). Closer still is [`portgraph`](https://crates.io/crates/portgraph), which adds ports as first class objects but not edges. So why create a new graph structure crate?
 
 Most graph libraries are optimized for very large graph structures with two first class objects: nodes and edges. They can store additional information like weights on the edges or attributes on the nodes. But when implementing a port graph one has to either use a ports-as-nodes or objects-as-nodes structure where the node-port relationship is symbolically stored in a parallel data structure. This becomes cumbersome quite quickly and often obsoletes most of the advantage of using something like `petgraph` in the first place.
 
